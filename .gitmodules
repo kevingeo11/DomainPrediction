@@ -1,3 +1,4 @@
-[submodule "CarbonDesign"]
+[submodule "carbonmatrix_public"]
 	path = carbonmatrix_public
 	url = https://github.com/zhanghaicang/carbonmatrix_public.git
+    
