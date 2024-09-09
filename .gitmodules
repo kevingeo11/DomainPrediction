@@ -2,3 +2,9 @@
 	path = carbonmatrix_public
 	url = https://github.com/zhanghaicang/carbonmatrix_public.git
     
+[submodule "esm"]
+	path = esm
+	url = https://github.com/evolutionaryscale/esm.git
+[submodule "protein_bert"]
+	path = protein_bert
+	url = https://github.com/nadavbra/protein_bert.git
