@@ -5,6 +5,11 @@
 [submodule "esm"]
 	path = esm
 	url = https://github.com/evolutionaryscale/esm.git
+	
 [submodule "protein_bert"]
 	path = protein_bert
 	url = https://github.com/nadavbra/protein_bert.git
+
+[submodule "ProteinMPNN"]
+	path = ProteinMPNN
+	url = https://github.com/dauparas/ProteinMPNN.git

@@ -5,6 +5,7 @@ import re
 import numpy as np
 from ..utils.hmmtools import HmmerTools
 from ..utils import helper
+from ..utils.tmalign import TMalign
 
 def compute_sequence_identity(wt: str, gen: str, hmm: str, trim: bool=False) -> list:
     if len(helper.read_fasta(wt, mode='str')) == 0 or len(helper.read_fasta(gen, mode='str')) == 0:
@@ -84,5 +85,24 @@ def compute_perplexity(model, sequence, mask_token='<mask>'):
         sum_log += prob_pos
 
     return np.exp(-1*sum_log/len(sequence))
+
+
+def compute_TMscore(tm_path, pdbs_path, ref_path, prefix='', save_meta=True, force=False):
+    tmalign = TMalign(tm_path)
+
+    TM_scores = []
+    for f in tqdm(os.listdir(pdbs_path)):
+        file = os.path.join(pdbs_path, f)
+        if f.endswith('.pdb'):
+            res = tmalign.run(ref_path, file)
+            TM_scores.append(res['tm_score'])
+
+            if save_meta:
+                meta_file = file.replace('.pdb', '.meta.npz')
+                for key in res:
+                    helper.update_metadata(meta_file, prefix+key, res[key], force=force)
+            
+    return TM_scores
+
 
     

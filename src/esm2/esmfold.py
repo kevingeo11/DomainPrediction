@@ -6,13 +6,13 @@ import torch
 
 from DomainPrediction import BaseProtein
 
-os.environ['TRANSFORMERS_CACHE'] = '/nethome/kgeorge/workspace/DomainPrediction/Data/esm_experiments/tmp/'
+# os.environ['TRANSFORMERS_CACHE'] = '/nethome/kgeorge/workspace/DomainPrediction/Data/esm_experiments/tmp/'
 
 root = '../..'
 data_path = os.path.join(root, 'Data/')
 
 ## Read Protein
-protein = BaseProtein(file=os.path.join(data_path, 'GxpS_ATC.pdb'))
+protein = BaseProtein(file=os.path.join(data_path, 'GxpS_ATC_AF.pdb'))
 A = [i for i in range(33,522)] ## 34-522
 C = [i for i in range(637,1067)] ## 638-1067
 T = [i for i in range(538, 608)] ## 539-608
@@ -29,8 +29,10 @@ from DomainPrediction.utils import helper
 
 class esmFold():
     def __init__(self, device='cpu') -> None:
-        self.model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1")
-        self.tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+        self.model = EsmForProteinFolding.from_pretrained("/data/users/kgeorge/workspace/esm2/esmfold")
+        self.tokenizer = AutoTokenizer.from_pretrained("/data/users/kgeorge/workspace/esm2/esmfold")
+        # self.model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1")
+        # self.tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
         self.device = device
 
         if self.device == 'gpu':
@@ -104,7 +106,7 @@ class esmFold():
 esmfold = esmFold(device='gpu')
 
 ## save pdbs from a fasta file
-save_path = os.path.join(data_path, 'esm_experiments/gen_1000/pdbs_GxpS_ATC')
-gen = os.path.join(data_path, 'esm_experiments/gen_1000/esm_inp_seq_1000.fasta')
+save_path = os.path.join(data_path, 'evodiff_experiments/pdbs_ATC')
+gen = os.path.join(data_path, 'evodiff_experiments/evodiff_100.fasta')
 esmfold.structures_from_fasta(file=gen, save_path=save_path)
 

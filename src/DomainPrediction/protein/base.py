@@ -20,6 +20,7 @@ class BaseProtein():
         if n_chains > 1:
             raise Exception('Method not designed for multiple chains')
 
+        self.id = id
         self.sequence = ''.join([AA20_3_TO_1[res.resname] for res in chain.get_residues()])
 
     def get_residues(self, resnums: list):
@@ -38,10 +39,12 @@ class FoldedProtein(BaseProtein):
         self.pTM = None
         self.pAE = None
 
-        if os.path.isfile(file.replace('.pdb', 'meta.npz')):
-            metadata = np.load(file.replace('.pdb', 'meta.npz'))
+        if os.path.isfile(file.replace('.pdb', '.meta.npz')):
+            metadata = np.load(file.replace('.pdb', '.meta.npz'))
             self.pTM = metadata['ptm']
             self.pAE = metadata['predicted_aligned_error']
+            self.metadata = dict(metadata)
+            
 
 
 class ESMBaseProtein(BaseProtein):

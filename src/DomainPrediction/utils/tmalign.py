@@ -18,7 +18,7 @@ class TMalign():
                 break
 
         return {
-            'rmsd': rmsd,
-            'seq_id': seq_id,
+            'tm_rmsd': rmsd,
+            'tm_seq_id': seq_id,
             'tm_score': tm_score
         }
