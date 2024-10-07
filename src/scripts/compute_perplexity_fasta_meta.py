@@ -11,13 +11,12 @@ from DomainPrediction.utils import helper
 model_path = '/data/users/kgeorge/workspace/esm2/checkpoints/esm2_t33_650M_UR50D.pt'
 esm2 = ESM2(model_path = model_path, device='gpu')
 
-fasta_path = '../../Data/evodiff_experiments/gxps_exp/gxps_evodiff_1000.fasta'
-meta_path = '../../Data/evodiff_experiments/gxps_exp/gxps_pdbs'
+fasta_path = '../../Data/round_2_exp/round_1.fasta'
+meta_file = '../../Data/round_2_exp/round_1_metadata.json'
 
 records = helper.read_fasta(fasta_path)
 for rec in records:
     perplexity = metrics.compute_perplexity(esm2, str(rec.seq))
-    meta_file = os.path.join(meta_path, rec.id + '.meta.npz')
 
-    print(meta_file, perplexity)
-    helper.update_metadata(meta_file, 'esm2_650M_perplexity', perplexity, force=False)
+    print(rec.id, perplexity)
+    helper.update_metadata_json(meta_file, rec.id, 'esm2_650M_perplexity', perplexity, force=False)

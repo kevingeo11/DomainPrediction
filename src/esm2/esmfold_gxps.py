@@ -103,7 +103,7 @@ class esmFold():
 esmfold = esmFold(device='gpu')
 
 ## save pdbs from a fasta file
-save_path = os.path.join(data_path, 'esm3_experiments/6mfw_exp/6mfw_pdbs')
-gen = os.path.join(data_path, 'esm3_experiments/6mfw_exp/6mfw_esm3_1000.fasta')
+save_path = os.path.join(data_path, 'esm3_experiments/gxps_exp/gxps_pdbs')
+gen = os.path.join(data_path, 'esm3_experiments/gxps_exp/gxps_esm3_1000.fasta')
 esmfold.structures_from_fasta(file=gen, save_path=save_path)
 

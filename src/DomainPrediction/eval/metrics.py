@@ -18,6 +18,9 @@ def compute_sequence_identity(wt: str, gen: str, hmm: str, trim: bool=False) -> 
     wt_record = helper.read_fasta(wt)[0]
     gen_records = helper.read_fasta(gen)
 
+    ## updating with query length
+    query_len = len(str(wt_record.seq))
+
     hmmer = HmmerTools()
     seq_id_list = []
     for rec in tqdm(gen_records):
@@ -41,7 +44,7 @@ def compute_sequence_identity(wt: str, gen: str, hmm: str, trim: bool=False) -> 
             if s1 != '-' and s2 != '-' and s1 != '.' and s2 != '.' and s1 == s2:
                 seq_id += 1
 
-        seq_id_list.append(seq_id/alignment_length)
+        seq_id_list.append(seq_id/query_len)
 
         os.remove(tmp_file)
         os.remove(tmp_file.replace('.fasta', '.stockholm'))

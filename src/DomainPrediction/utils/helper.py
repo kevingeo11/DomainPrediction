@@ -1,4 +1,5 @@
 import os
+import json
 from typing import List, Union
 import numpy as np
 from Bio import SeqIO
@@ -20,11 +21,11 @@ def create_fasta(sequences: dict | List[SeqRecord],
         records = sequences
 
     if append:
-        with open(file, 'a') as file:
-            SeqIO.write(records, file, "fasta")
+        with open(file, 'a') as f:
+            SeqIO.write(records, f, "fasta")
     else:
-        with open(file, 'w') as file:
-            SeqIO.write(records, file, "fasta")
+        with open(file, 'w') as f:
+            SeqIO.write(records, f, "fasta")
 
 
 def read_fasta(file: str, mode: str='default') -> List[type[SeqRecord] | str]:
@@ -44,3 +45,22 @@ def update_metadata(file, key, value, force=False):
         np.savez(file.replace('.npz', ''), **metadata)
     else:
         raise Exception(f'{file} metadata not found')
+    
+def update_metadata_json(json_file, protein_id, key, value, force=False):
+    try:
+        with open(json_file, 'r') as file:
+            metadata = json.load(file)
+    except:
+        metadata = {}
+
+    if protein_id in metadata:
+        if not force and key in metadata[protein_id]:
+            raise Exception(f'key {key} found for protein {protein_id}. If you want to force add then keep force=True')
+        metadata[protein_id][key] = value
+    else:
+        metadata[protein_id] = {
+            key: value
+        }
+
+    with open(json_file, 'w') as file:
+        json.dump(metadata, file, indent=4)

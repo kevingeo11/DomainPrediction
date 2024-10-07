@@ -17,19 +17,19 @@ from DomainPrediction.utils import helper
 from DomainPrediction.utils.constants import *
 
 
-protein = ProteinChain.from_pdb('../../Data/6mfw_conformations/hm_6mfz_ATC.pdb')
+protein = ProteinChain.from_pdb('../../Data/gxps/gxps_ATC_hm_6mfy.pdb')
 
-sequence_prompt = ''.join([protein[i].sequence if i not in T_6mfw else '_' for i in range(len(protein))])
+sequence_prompt = ''.join([protein[i].sequence if i not in T_gxps_atc else '_' for i in range(len(protein))])
 structure_prompt = torch.tensor(protein.atom37_positions)
 
 model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to("cuda")
 
-fasta_file = '../../Data/esm3_experiments/6mfw_exp/6mfw_esm3_1000.fasta' ## file loc
+fasta_file = '../../Data/esm3_experiments/gxps_exp/gxps_esm3_1000.fasta' ## file loc
 
 N_GENERATIONS = 1000
 temperature = 0.5
 run_structure = False
-print(f'T domain: {protein[T_6mfw].sequence}')
+print(f'T domain: {protein[T_gxps_atc].sequence}')
 for idx in range(N_GENERATIONS):
     
     if run_structure and idx > 1:
@@ -57,13 +57,13 @@ for idx in range(N_GENERATIONS):
         assert generated_protein.sequence == structure_prediction.sequence
         # structure_prediction.to_pdb(os.path.join(pdbfile_loc, gen_idx))
 
-    print(f"T domain: {''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in T_6mfw])}")
+    print(f"T domain: {''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in T_gxps_atc])}")
 
-    assert protein[A_6mfw].sequence == ''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in A_6mfw])
-    assert protein[C_6mfw].sequence == ''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in C_6mfw])
+    assert protein[A_gxps_atc].sequence == ''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in A_gxps_atc])
+    assert protein[C_gxps_atc].sequence == ''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in C_gxps_atc])
 
     seq_dict = {}
-    gen_idx = f'6mfw_ATC_esm3_temp_{temperature}_gen_{idx}'
+    gen_idx = f'gxps_ATC_esm3_temp_{temperature}_gen_{idx}'
     seq_dict[gen_idx] = generated_protein.sequence
 
     print(gen_idx)
