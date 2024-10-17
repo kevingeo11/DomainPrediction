@@ -17,6 +17,7 @@ from esm.utils.structure.protein_chain import ProteinChain
 
 from DomainPrediction.protein.base import BaseProtein
 from DomainPrediction.utils.constants import *
+from DomainPrediction.utils import helper
 
 data_path = '../../Data/round_2_exp'
 
@@ -76,7 +77,12 @@ max_LL = likelihood_db[starting_sequence]
 positions = [i for i in range(len(starting_sequence)) if i not in A_gxps_atc + C_gxps_atc]
 best_seq = starting_sequence
 
-for _j in range(15):
+fasta_file = os.path.join(data_path, 'll_improve.fasta')
+helper.create_fasta({
+    'start_seq': best_seq
+}, file=fasta_file, append=True)
+
+for _j in range(150):
     logger.info(f'starting run {_j}: likelihood {max_LL}')
     _best_seq = ''.join([best_seq[i] for i in range(len(best_seq)) if i not in A_gxps_atc + C_gxps_atc])
     logger.info(f'best seq at start run {_j}: {_best_seq}')
@@ -122,6 +128,10 @@ for _j in range(15):
     for i, (aa_i, aa_j) in enumerate(zip(_ini_seq, _best_seq)):
         if aa_i != aa_j:
             logger.info(f'mutation at rel {i} from {aa_i} to {aa_j}')
+
+    helper.create_fasta({
+        f'round_{_j+1}_seq': best_seq
+    }, file=fasta_file, append=True)
 
     if max_LL > check_ll:
         assert best_seq != starting_sequence
