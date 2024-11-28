@@ -11,8 +11,8 @@ from DomainPrediction.utils import helper
 model_path = '/data/users/kgeorge/workspace/esm2/checkpoints/esm2_t33_650M_UR50D.pt'
 esm2 = ESM2(model_path = model_path, device='gpu')
 
-fasta_path = '../../Data/round_2_exp/mpnn_motif_change.fasta'
-meta_file = '../../Data/round_2_exp/mpnn_motif_change_metadata.json'
+fasta_path = '../../Data/round_2_exp/ll_guidance/ll_guidance.fasta'
+meta_file = '../../Data/round_2_exp/ll_guidance/ll_guidance_metadata.json'
 
 records = helper.read_fasta(fasta_path)
 for rec in records:

@@ -19,11 +19,11 @@ from DomainPrediction.protein.base import BaseProtein
 from DomainPrediction.utils.constants import *
 from DomainPrediction.utils import helper
 
-data_path = '../../Data/round_2_exp'
+data_path = '../../Data/round_2_exp/ll_guidance'
 
 logger = logging.getLogger('LL')
 logger.setLevel(logging.INFO)
-fh = logging.FileHandler(os.path.join(data_path, f'LL_improv_max_prov.log'))
+fh = logging.FileHandler(os.path.join(data_path, f'LL_improv_max_prob_start_r1_best.log'))
 fh.setLevel(logging.INFO)
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
@@ -33,7 +33,8 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
-protein = BaseProtein('../../Data/gxps/gxps_ATC_hm_6mfy.pdb')
+record = helper.read_fasta('../../Data/round_2_exp/round1.best.fasta')[0]
+protein = BaseProtein(sequence=str(record.seq), id=record.id)
 
 WT_sequence = protein.sequence
 
@@ -79,7 +80,7 @@ logger.info(f'starting sequence LL: {likelihood_db[starting_sequence]}')
 positions = [i for i in range(len(starting_sequence)) if i not in A_gxps_atc + C_gxps_atc]
 best_seq = starting_sequence
 
-fasta_file = os.path.join(data_path, 'll_prob_improve.fasta')
+fasta_file = os.path.join(data_path, 'll_prob_improve_start_r1_best.fasta')
 helper.create_fasta({
     'start_seq': best_seq
 }, file=fasta_file, append=True)
