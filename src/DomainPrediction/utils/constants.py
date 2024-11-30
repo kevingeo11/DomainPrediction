@@ -1,4 +1,6 @@
+alphabet = 'ACDEFGHIKLMNPQRSTVWY'
 
+amino_acid_alphabet_list = list(alphabet)
 
 A_6mfw = [i for i in range(0, 464)]
 C_6mfw = [i for i in range(571, 1000)]
