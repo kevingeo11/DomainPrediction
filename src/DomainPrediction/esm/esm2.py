@@ -30,6 +30,21 @@ class ESM2():
 
         return results
 
+    def get_res_batch(self, sequences):
+        data = [
+            (f"P{i+1}", seq) for i, seq in enumerate(sequences)
+        ]
+        batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+        batch_lens = (batch_tokens != self.alphabet.padding_idx).sum(1)
+
+        if self.device == 'gpu':
+            batch_tokens = batch_tokens.cuda()
+
+        with torch.no_grad():
+            results = self.model(batch_tokens, repr_layers=[33], return_contacts=True)
+
+        return results, batch_lens
+
     def get_logits(self, sequence):
 
         results = self.get_res(sequence)

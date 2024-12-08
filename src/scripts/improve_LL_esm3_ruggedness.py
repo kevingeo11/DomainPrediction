@@ -85,16 +85,16 @@ logger.info(f'peak_sequence sequence LL: {likelihood_db[peak_sequence]}')
 positions = [i for i in range(len(peak_sequence)) if i not in A_gxps_atc + C_gxps_atc]
 random.seed(0)
 exp_results = {}
-for n_mut_pos in range(3):
+for n_mut_pos in range(8):
 
     logger.info(f'Start Run for # mutations: {n_mut_pos+1}')
-
-    starting_sequence = peak_sequence
 
     m_tag = f'M{n_mut_pos+1}'
     exp_results[m_tag] = {}
 
-    for _reps in range(3):
+    for _reps in range(20):
+
+        starting_sequence = peak_sequence
 
         rep_tag = m_tag + f'R{_reps+1}'
         exp_results[m_tag][rep_tag] = {}
