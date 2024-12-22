@@ -15,7 +15,7 @@ class ESM2():
         self.tok_to_idx = self.alphabet.tok_to_idx
         self.idx_to_tok = {v:k for k,v in self.tok_to_idx.items()}
 
-    def get_res(self, sequence):
+    def get_res(self, sequence, rep_layer=33):
         data = [
             ("protein1", sequence)
         ]
@@ -26,11 +26,11 @@ class ESM2():
             batch_tokens = batch_tokens.cuda()
 
         with torch.no_grad():
-            results = self.model(batch_tokens, repr_layers=[33], return_contacts=True)
+            results = self.model(batch_tokens, repr_layers=[rep_layer], return_contacts=True)
 
         return results
 
-    def get_res_batch(self, sequences):
+    def get_res_batch(self, sequences, rep_layer=33):
         data = [
             (f"P{i+1}", seq) for i, seq in enumerate(sequences)
         ]
@@ -41,7 +41,7 @@ class ESM2():
             batch_tokens = batch_tokens.cuda()
 
         with torch.no_grad():
-            results = self.model(batch_tokens, repr_layers=[33], return_contacts=True)
+            results = self.model(batch_tokens, repr_layers=[rep_layer], return_contacts=True)
 
         return results, batch_lens
 
