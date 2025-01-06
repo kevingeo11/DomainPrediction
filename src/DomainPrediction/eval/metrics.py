@@ -71,6 +71,7 @@ def search_and_filter_motif(file: str, pattern: str = 'FF.{2}GG.{1}S'):
 def compute_perplexity(model, sequence, mask_token='<mask>'):
     '''
         pseudoperplexity(x) = exp( -1/L \sum_{i=1}_{L} [log( p(x_{i}|x_{j!=i}) )] )
+        This is only made for esm2 class
     '''
     
     sum_log = 0

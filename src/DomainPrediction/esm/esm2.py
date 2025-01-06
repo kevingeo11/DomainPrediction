@@ -1,5 +1,7 @@
 import torch
 import esm
+from tqdm import tqdm
+import numpy as np
 
 
 class ESM2():
@@ -9,13 +11,28 @@ class ESM2():
         self.model.eval()
         self.device = device
 
+        if 't6_8M' in model_path:
+            self.rep_layer = 6
+            self.emb_dim = 320
+        elif 't30_150M' in model_path:
+            self.rep_layer = 30
+            self.emb_dim = 640
+        elif 't33_650M' in model_path:
+            self.rep_layer = 33
+            self.emb_dim = 1280
+        else:
+            raise Exception('I need to work on this. Feel free to extend :)')
+
         if self.device == 'gpu':
             self.model.cuda()
 
         self.tok_to_idx = self.alphabet.tok_to_idx
         self.idx_to_tok = {v:k for k,v in self.tok_to_idx.items()}
 
-    def get_res(self, sequence, rep_layer=33):
+    def get_res(self, sequence, rep_layer=None):
+        if rep_layer is None:
+            rep_layer = self.rep_layer
+
         data = [
             ("protein1", sequence)
         ]
@@ -30,7 +47,10 @@ class ESM2():
 
         return results
 
-    def get_res_batch(self, sequences, rep_layer=33):
+    def get_res_batch(self, sequences, rep_layer=None):
+        if rep_layer is None:
+            rep_layer = self.rep_layer
+
         data = [
             (f"P{i+1}", seq) for i, seq in enumerate(sequences)
         ]
@@ -55,6 +75,82 @@ class ESM2():
         prob = torch.nn.functional.softmax(logits, dim=-1)[0, 1:-1, :] # 1st and last are start and end tokens
 
         return prob.cpu().numpy()
+    
+    def get_embeddings_mean(self, sequences):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq)
+            embeddings.append(rep['representations'][self.rep_layer][:,1:-1,:].mean(1).cpu().numpy())
+
+        embeddings = np.concatenate(embeddings, axis=0)
+
+        return embeddings
+    
+    def get_embeddings_flatten(self, sequences):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq)
+            embeddings.append(rep['representations'][self.rep_layer][:,1:-1,:].cpu().numpy()[0].flatten())
+
+        embeddings = np.stack(embeddings, axis=0)
+
+        return embeddings
+    
+    def __get_embeddings_full(self, sequences):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq)
+            embeddings.append(rep['representations'][self.rep_layer][:,1:-1,:].cpu().numpy()[0])
+
+        return embeddings
+    
+    def get_embeddings_cls(self, sequences):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq)
+            embeddings.append(rep['representations'][self.rep_layer][:, 0, :].cpu().numpy())
+
+        embeddings = np.concatenate(embeddings, axis=0)
+
+        return embeddings
+    
+    def get_embeddings_feature_pool(self, sequences, pool='mean'):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq)
+            if pool == 'mean':
+                embeddings.append(rep['representations'][self.rep_layer][:,1:-1,:].mean(-1).cpu().numpy())
+            elif pool == 'sum':
+                embeddings.append(rep['representations'][self.rep_layer][:,1:-1,:].sum(-1).cpu().numpy())
+            else:
+                raise Exception('pool can only take values mean or sum')
+            
+        embeddings = np.concatenate(embeddings, axis=0)
+
+        return embeddings
+    
+    def compute_perplexity(self, sequence, mask_token='<mask>'):
+        '''
+            pseudoperplexity(x) = exp( -1/L \sum_{i=1}_{L} [log( p(x_{i}|x_{j!=i}) )] )
+            
+        '''
+        
+        sum_log = 0
+        for pos in range(len(sequence)):
+            masked_query = list(sequence)
+            assert mask_token not in masked_query
+            masked_query[pos] = mask_token
+            masked_query = ''.join(masked_query)
+            prob = self.get_prob(sequence=masked_query)
+
+            assert prob.shape[0] == len(sequence)
+
+            prob_pos = np.log(prob[pos, self.tok_to_idx[sequence[pos]]])
+            
+            sum_log += prob_pos
+
+        return np.exp(-1*sum_log/len(sequence))
+
     
 
 class ESM2_iterate():
