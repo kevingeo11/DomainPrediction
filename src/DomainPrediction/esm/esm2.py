@@ -150,6 +150,27 @@ class ESM2():
             sum_log += prob_pos
 
         return np.exp(-1*sum_log/len(sequence))
+    
+    def get_wildtype_marginal(self, mt_sequence, wt_sequence, wt_log_prob=None):
+        if wt_log_prob is None:
+            assert len(wt_sequence) == len(mt_sequence)
+            wt_log_prob = self.get_log_prob(sequence=wt_sequence)
+
+        assert wt_log_prob.shape[0] == len(wt_sequence) == len(mt_sequence)
+
+        n_muts = 0
+        score = 0
+        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
+            if aa_wt != aa_mt:
+                ## mutation pos
+                n_muts += 1
+
+                idx_mt = self.tok_to_idx[aa_mt]
+                idx_wt = self.tok_to_idx[aa_wt]
+                score += wt_log_prob[i, idx_mt] - wt_log_prob[i, idx_wt]
+
+
+        return score.cpu().item(), n_muts
 
     
 

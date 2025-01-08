@@ -77,6 +77,16 @@ class ESM3LM():
 
         return embeddings
     
+    def get_embeddings_cls(self, sequences):
+        embeddings = []
+        for seq in tqdm(sequences):
+            rep = self.get_res(sequence=seq, return_embeddings=True)
+            embeddings.append(rep.embeddings[:, 0, :].cpu().numpy())
+
+        embeddings = np.concatenate(embeddings, axis=0)
+
+        return embeddings
+    
     def compute_perplexity(self, sequence, mask_token='_'):
         '''
             pseudoperplexity(x) = exp( -1/L \sum_{i=1}_{L} [log( p(x_{i}|x_{j!=i}) )] )
