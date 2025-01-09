@@ -151,6 +151,12 @@ class ESM2():
 
         return np.exp(-1*sum_log/len(sequence))
     
+    def get_log_prob(self, sequence):
+        logits = self.get_logits(sequence)
+        log_prob = torch.log_softmax(logits, dim=-1)[0,1:-1,:]
+
+        return log_prob.cpu().numpy()
+    
     def get_wildtype_marginal(self, mt_sequence, wt_sequence, wt_log_prob=None):
         if wt_log_prob is None:
             assert len(wt_sequence) == len(mt_sequence)
@@ -170,7 +176,43 @@ class ESM2():
                 score += wt_log_prob[i, idx_mt] - wt_log_prob[i, idx_wt]
 
 
-        return score.cpu().item(), n_muts
+        return score, n_muts
+    
+    def get_masked_marginal(self, mt_sequence, wt_sequence, mask_token = '<mask>'):
+
+        assert len(wt_sequence) == len(mt_sequence)
+
+        n_muts = 0
+        mask_positions = []
+        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
+            if aa_wt != aa_mt:
+                ## mutation pos
+                n_muts += 1
+                mask_positions.append(i)
+
+        assert len(mask_positions) == n_muts
+        masked_query = list(wt_sequence)
+        for _pos in mask_positions:
+            masked_query[_pos] = mask_token
+        masked_sequence = ''.join(masked_query)
+
+        masked_log_prob = self.get_log_prob(sequence=masked_sequence)
+        
+        score = 0
+        _idx = 0
+        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
+            if aa_wt != aa_mt:
+                ## mutation pos
+
+                assert mask_positions[_idx] == i
+                _idx += 1
+
+                idx_mt = self.tok_to_idx[aa_mt]
+                idx_wt = self.tok_to_idx[aa_wt]
+                score += masked_log_prob[i, idx_mt] - masked_log_prob[i, idx_wt]
+
+
+        return score, n_muts
 
     
 
