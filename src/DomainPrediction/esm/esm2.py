@@ -43,7 +43,7 @@ class ESM2():
             batch_tokens = batch_tokens.cuda()
 
         with torch.no_grad():
-            results = self.model(batch_tokens, repr_layers=[rep_layer], return_contacts=True)
+            results = self.model(batch_tokens, repr_layers=[rep_layer], return_contacts=False)
 
         return results
 
