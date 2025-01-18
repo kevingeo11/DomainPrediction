@@ -178,3 +178,53 @@ class ESMCLM():
 
 
         return score, n_muts
+    
+    def get_masked_marginal_var(self, mt_sequence, wt_sequence, mask_token = '_', mode='wt'):
+
+        assert len(wt_sequence) == len(mt_sequence)
+
+        n_muts = 0
+        score = 0
+        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
+            if aa_wt != aa_mt:
+                ## mutation pos
+                n_muts += 1
+
+                masked_query_mt = list(mt_sequence)
+                masked_query_mt[i] = mask_token
+                masked_sequence_mt = ''.join(masked_query_mt)
+                masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+                if mode == 'wt':
+                    masked_query_wt = list(wt_sequence)
+                elif mode == 'mt':
+                    masked_query_wt = list(mt_sequence)
+                else:
+                    raise Exception('mode takes values mt and wt')
+
+                masked_query_wt[i] = mask_token
+                masked_sequence_wt = ''.join(masked_query_wt)
+                masked_log_prob_wt = self.get_log_prob(sequence=masked_sequence_wt)
+
+                idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
+                idx_wt = self.model.tokenizer.convert_tokens_to_ids(aa_wt)
+                score += masked_log_prob_mt[i, idx_mt] - masked_log_prob_wt[i, idx_wt]
+
+
+        return score, n_muts
+    
+    def pseudolikelihood(self, mt_sequence, mask_token = '_'):
+
+        score = 0
+        for i, aa_mt in enumerate(zip(mt_sequence)):
+
+            masked_query_mt = list(mt_sequence)
+            masked_query_mt[i] = mask_token
+            masked_sequence_mt = ''.join(masked_query_mt)
+            masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+            idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
+            score += masked_log_prob_mt[i, idx_mt]
+
+
+        return score

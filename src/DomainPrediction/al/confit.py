@@ -378,7 +378,6 @@ class ESM2ConFit(pl.LightningModule):
         )
 
 
-
 class ESMCConFit(pl.LightningModule):
     def __init__(self, name, config) -> None:
         super().__init__()
@@ -420,6 +419,10 @@ class ESMCConFit(pl.LightningModule):
 
         self.accumulate_batch_loss_train = []
         self.accumulate_batch_loss_val = []
+        self.accumulate_batch_bt_loss_train = []
+        self.accumulate_batch_bt_loss_val = []
+        self.accumulate_batch_kl_div_train = []
+        self.accumulate_batch_kl_div_val = []
         self.debug=True
 
     def forward(self, batch, batch_tokens_masked, batch_tokens, batch_tokens_wt):
@@ -446,6 +449,7 @@ class ESMCConFit(pl.LightningModule):
         for i in range(len(scores)):
             for j in range(i, len(scores)):
                 if y[i] > y[j]:
+
                     loss += torch.log(1 + torch.exp(scores[j]-scores[i]))
                 else:
                     loss += torch.log(1 + torch.exp(scores[i]-scores[j]))
@@ -485,6 +489,8 @@ class ESMCConFit(pl.LightningModule):
 
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
         self.accumulate_batch_loss_train.append(loss.item())
+        self.accumulate_batch_bt_loss_train.append(bt_loss.item())
+        self.accumulate_batch_kl_div_train.append(l_reg.item())
         
         return loss
     
@@ -503,6 +509,8 @@ class ESMCConFit(pl.LightningModule):
 
         y_hat, logits = self(batch, batch_tokens_masked, batch_tokens, batch_tokens_wt)
 
+        # print(y_hat)
+
         bt_loss = self.BT_loss(y_hat, y)
 
         if self.config['device'] == 'gpu':
@@ -518,8 +526,12 @@ class ESMCConFit(pl.LightningModule):
 
         loss = bt_loss + self.lambda_reg*l_reg
 
+        # print(f'contrast loss: {bt_loss.item()} | reg loss: {l_reg.item()} | loss: {loss.item()}')
+
         self.log("val/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
         self.accumulate_batch_loss_val.append(loss.item())
+        self.accumulate_batch_bt_loss_val.append(bt_loss.item())
+        self.accumulate_batch_kl_div_val.append(l_reg.item())
 
     def trainmodel(self, df, wt, val=None, debug=True):
         self.model.train()
@@ -593,10 +605,16 @@ class ESMCConFit(pl.LightningModule):
     def on_train_epoch_start(self):
         self.accumulate_batch_loss_train.clear()
         self.accumulate_batch_loss_val.clear()
+
+        self.accumulate_batch_bt_loss_train.clear()
+        self.accumulate_batch_bt_loss_val.clear()
+
+        self.accumulate_batch_kl_div_train.clear()
+        self.accumulate_batch_kl_div_val.clear()
     
     def on_train_epoch_end(self):
         if self.current_epoch % self.config['print_every_n_epoch'] == 0 and self.debug:
-            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
+            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} bt loss: {np.mean(self.accumulate_batch_bt_loss_train)} kl div {np.mean(self.accumulate_batch_kl_div_train)} val loss: {np.mean(self.accumulate_batch_loss_val)} bt loss: {np.mean(self.accumulate_batch_bt_loss_val)} kl div {np.mean(self.accumulate_batch_kl_div_val)}')
 
     def on_train_end(self):
         print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
@@ -690,3 +708,53 @@ class ESMCConFit(pl.LightningModule):
         print(
             f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
         )
+
+    def get_masked_marginal_var(self, mt_sequence, wt_sequence, mask_token = '_', mode='wt'):
+
+        assert len(wt_sequence) == len(mt_sequence)
+
+        n_muts = 0
+        score = 0
+        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
+            if aa_wt != aa_mt:
+                ## mutation pos
+                n_muts += 1
+
+                masked_query_mt = list(mt_sequence)
+                masked_query_mt[i] = mask_token
+                masked_sequence_mt = ''.join(masked_query_mt)
+                masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+                if mode == 'wt':
+                    masked_query_wt = list(wt_sequence)
+                elif mode == 'mt':
+                    masked_query_wt = list(mt_sequence)
+                else:
+                    raise Exception('mode takes values mt and wt')
+
+                masked_query_wt[i] = mask_token
+                masked_sequence_wt = ''.join(masked_query_wt)
+                masked_log_prob_wt = self.get_log_prob(sequence=masked_sequence_wt)
+
+                idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
+                idx_wt = self.model.tokenizer.convert_tokens_to_ids(aa_wt)
+                score += masked_log_prob_mt[i, idx_mt] - masked_log_prob_wt[i, idx_wt]
+
+
+        return score, n_muts
+    
+    def pseudolikelihood(self, mt_sequence, mask_token = '_'):
+
+        score = 0
+        for i, aa_mt in enumerate(zip(mt_sequence)):
+
+            masked_query_mt = list(mt_sequence)
+            masked_query_mt[i] = mask_token
+            masked_sequence_mt = ''.join(masked_query_mt)
+            masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+            idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
+            score += masked_log_prob_mt[i, idx_mt]
+
+
+        return score
