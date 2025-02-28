@@ -64,3 +64,11 @@ def update_metadata_json(json_file, protein_id, key, value, force=False):
 
     with open(json_file, 'w') as file:
         json.dump(metadata, file, indent=4)
+
+def hamming_distance(seq1, seq2):
+    # Ensure the sequences are of the same length
+    if len(seq1) != len(seq2):
+        raise ValueError("Sequences must be of equal length to compute Hamming distance.")
+    
+    # Count differences
+    return sum(c1 != c2 for c1, c2 in zip(seq1, seq2))

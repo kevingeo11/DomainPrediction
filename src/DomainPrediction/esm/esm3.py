@@ -171,3 +171,22 @@ class ESM3LM():
 
 
         return score, n_muts
+    
+    def pseudolikelihood(self, mt_sequence, mask_token='_'):
+        '''
+            pseudoperplexity(x) = exp( -1/L \sum_{i=1}_{L} [log( p(x_{i}|x_{j!=i}) )] )
+            
+        '''
+        
+        score = 0
+        for i, aa_mt in enumerate(zip(mt_sequence)):
+            masked_query_mt = list(mt_sequence)
+            masked_query_mt[i] = mask_token
+            masked_sequence_mt = ''.join(masked_query_mt)
+            masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+            idx_mt = self.model.tokenizers.sequence.convert_tokens_to_ids(aa_mt)
+
+            score += masked_log_prob_mt[i, idx_mt]
+
+        return score
