@@ -1,10 +1,11 @@
 import os
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from peft import LoraConfig, get_peft_model
 
 import numpy as np
@@ -18,6 +19,16 @@ elif env == 'workspace-esm':
     import esm
 else:
     raise Exception('Who are you?')
+
+class ProteinFunDatasetLora(Dataset):
+    def __init__(self, df):
+        self.seq, self.y = df['seq'].to_numpy(), df['fitness_log'].to_numpy().astype(np.float32)
+    
+    def __len__(self):
+        return self.seq.shape[0]
+    
+    def __getitem__(self, idx):
+        return self.seq[idx], self.y[idx]
 
 
 class ProteinFunDatasetContrast(Dataset):
@@ -406,10 +417,14 @@ class ESMCConFit(pl.LightningModule):
         )
         
         self.model = get_peft_model(self.basemodel, peft_config)
-
         for name, pm in self.model.named_parameters():
-            if 'q_ln' in name or 'k_ln' in name:
+            if 'q_ln' in name or 'k_ln' in name or 'norm.weight' in name:
                 pm.requires_grad = True
+
+        if self.config['use_seq_head']:
+            for name, pm in self.model.named_parameters():
+                if 'sequence_head' in name:
+                    pm.requires_grad = True
         
         if config['device'] == 'gpu':
             self.model.cuda()
@@ -425,8 +440,7 @@ class ESMCConFit(pl.LightningModule):
         self.accumulate_batch_kl_div_val = []
         self.debug=True
 
-    def forward(self, batch, batch_tokens_masked, batch_tokens, batch_tokens_wt):
-        mt_seq, _, wt_seq, pos, n_mut = batch
+    def forward(self, batch_tokens_masked, batch_tokens, batch_tokens_wt, pos):
         
         output = self.model(batch_tokens_masked)
         logits = output.sequence_logits
@@ -449,10 +463,11 @@ class ESMCConFit(pl.LightningModule):
         for i in range(len(scores)):
             for j in range(i, len(scores)):
                 if y[i] > y[j]:
-
-                    loss += torch.log(1 + torch.exp(scores[j]-scores[i]))
+                    if torch.abs(scores[j]-scores[i]) < 80:
+                        loss += torch.log(1 + torch.exp(scores[j]-scores[i]))
                 else:
-                    loss += torch.log(1 + torch.exp(scores[i]-scores[j]))
+                    if torch.abs(scores[i]-scores[j]) < 80:
+                        loss += torch.log(1 + torch.exp(scores[i]-scores[j]))
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -464,18 +479,20 @@ class ESMCConFit(pl.LightningModule):
         for i in range(batch_tokens.shape[0]):
             if len(pos[i]) > 0:
                 batch_tokens_masked[i, pos[i]+1] = self.model.tokenizer.mask_token_id
-        
+
         if self.config['device'] == 'gpu':
             batch_tokens_masked = batch_tokens_masked.cuda()
 
-        y_hat, logits = self(batch, batch_tokens_masked, batch_tokens, batch_tokens_wt)
+        assert len(pos) == len(batch_tokens_masked)
 
-        bt_loss = self.BT_loss(y_hat, y)
+        y_hat, logits = self(batch_tokens_masked, batch_tokens, batch_tokens_wt, pos)
 
         if self.config['device'] == 'gpu':
             batch_tokens_wt = batch_tokens_wt.cuda()
 
-        output = self.model_reg(batch_tokens_wt)
+        bt_loss = self.BT_loss(y_hat, y)
+
+        output = self.model_reg(batch_tokens_masked)
         logits_reg = output.sequence_logits
 
         creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
@@ -507,16 +524,14 @@ class ESMCConFit(pl.LightningModule):
         if self.config['device'] == 'gpu':
             batch_tokens_masked = batch_tokens_masked.cuda()
 
-        y_hat, logits = self(batch, batch_tokens_masked, batch_tokens, batch_tokens_wt)
-
-        # print(y_hat)
+        y_hat, logits = self(batch_tokens_masked, batch_tokens, batch_tokens_wt, pos)
 
         bt_loss = self.BT_loss(y_hat, y)
 
         if self.config['device'] == 'gpu':
             batch_tokens_wt = batch_tokens_wt.cuda()
 
-        output = self.model_reg(batch_tokens_wt)
+        output = self.model_reg(batch_tokens_masked)
         logits_reg = output.sequence_logits
 
         creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
@@ -524,7 +539,7 @@ class ESMCConFit(pl.LightningModule):
         probs_reg = torch.softmax(logits_reg, dim=-1)
         l_reg = creterion_reg(probs_reg.log().cuda(), probs)
 
-        loss = bt_loss + self.lambda_reg*l_reg
+        loss = bt_loss
 
         # print(f'contrast loss: {bt_loss.item()} | reg loss: {l_reg.item()} | loss: {loss.item()}')
 
@@ -546,13 +561,23 @@ class ESMCConFit(pl.LightningModule):
             val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=False)
         
         train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=True)
-        # train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=False)
 
         callbacks = None
         if self.config['early_stopping']:
             callbacks = []
             earlystopping_callback = EarlyStopping(monitor="val/loss", patience=self.config['patience'], verbose=False, mode="min")
             callbacks.append(earlystopping_callback)
+
+        if self.config['model_checkpoint']:
+            if callbacks is None:
+                callbacks = []
+            checkpoint_callback = ModelCheckpoint(
+                monitor="val/loss",
+                filename="best-checkpoint-{epoch:02d}",
+                save_top_k=2,
+                mode="min",
+            )
+            callbacks.append(checkpoint_callback)
 
 
         trainer = pl.Trainer(max_epochs=self.config['epoch'], callbacks=callbacks,
@@ -566,6 +591,10 @@ class ESMCConFit(pl.LightningModule):
         trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     def sanity_check(self, df, wt):
+        '''
+            Needs change to accomodate the new losses
+        '''
+
         dataset = ProteinFunDatasetContrast(df, wt)
         loader = DataLoader(dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=False)
 
@@ -584,7 +613,7 @@ class ESMCConFit(pl.LightningModule):
                 batch_tokens_masked = batch_tokens_masked.cuda()
 
             with torch.no_grad():
-                y_hat, _ = self(batch, batch_tokens_masked, batch_tokens, batch_tokens_wt)
+                y_hat, _ = self(batch_tokens_masked, batch_tokens, batch_tokens_wt, pos)
 
             y_pred_1.append(y_hat.cpu().numpy())
 
@@ -593,7 +622,9 @@ class ESMCConFit(pl.LightningModule):
         y_pred_2 = []
         for i, row in df.iterrows():
             mt_sequence = row['seq']
+
             score, n_muts = self.get_masked_marginal(mt_sequence, wt)
+
             assert n_muts == row['n_mut']
 
             y_pred_2.append(score)
@@ -637,27 +668,6 @@ class ESMCConFit(pl.LightningModule):
         log_prob = torch.log_softmax(logits[0, 1:-1, :33], dim=-1)
 
         return log_prob.to(torch.float32).cpu().numpy()
-    
-    def get_wildtype_marginal(self, mt_sequence, wt_sequence, wt_log_prob=None):
-        if wt_log_prob is None:
-            assert len(wt_sequence) == len(mt_sequence)
-            wt_log_prob = self.get_log_prob(sequence=wt_sequence)
-
-        assert wt_log_prob.shape[0] == len(wt_sequence) == len(mt_sequence)
-
-        n_muts = 0
-        score = 0
-        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
-            if aa_wt != aa_mt:
-                ## mutation pos
-                n_muts += 1
-
-                idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
-                idx_wt = self.model.tokenizer.convert_tokens_to_ids(aa_wt)
-                score += wt_log_prob[i, idx_mt] - wt_log_prob[i, idx_wt]
-
-
-        return score, n_muts
     
     def get_masked_marginal(self, mt_sequence, wt_sequence, mask_token = '_'):
 
@@ -709,52 +719,442 @@ class ESMCConFit(pl.LightningModule):
             f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
         )
 
-    def get_masked_marginal_var(self, mt_sequence, wt_sequence, mask_token = '_', mode='wt'):
+    def predict(self, sequences, wt_sequence):
+        pred = []
+        for seq in tqdm(sequences):
+            score, _ = self.get_masked_marginal(seq, wt_sequence)
+            pred.append(score)
 
-        assert len(wt_sequence) == len(mt_sequence)
-
-        n_muts = 0
-        score = 0
-        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
-            if aa_wt != aa_mt:
-                ## mutation pos
-                n_muts += 1
-
-                masked_query_mt = list(mt_sequence)
-                masked_query_mt[i] = mask_token
-                masked_sequence_mt = ''.join(masked_query_mt)
-                masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
-
-                if mode == 'wt':
-                    masked_query_wt = list(wt_sequence)
-                elif mode == 'mt':
-                    masked_query_wt = list(mt_sequence)
-                else:
-                    raise Exception('mode takes values mt and wt')
-
-                masked_query_wt[i] = mask_token
-                masked_sequence_wt = ''.join(masked_query_wt)
-                masked_log_prob_wt = self.get_log_prob(sequence=masked_sequence_wt)
-
-                idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
-                idx_wt = self.model.tokenizer.convert_tokens_to_ids(aa_wt)
-                score += masked_log_prob_mt[i, idx_mt] - masked_log_prob_wt[i, idx_wt]
+        return np.array(pred)
 
 
-        return score, n_muts
+class ESM2LoraRegression(pl.LightningModule):
+    def __init__(self, model_path, config) -> None:
+        super().__init__()
+        
+        self.basemodel, self.alphabet = esm.pretrained.load_model_and_alphabet(model_path)
+        self.model_reg, _ = esm.pretrained.load_model_and_alphabet(model_path)
+        self.batch_converter = self.alphabet.get_batch_converter()
+
+        self.config = config
+
+        if 't6_8M' in model_path:
+            self.rep_layer = 6
+            self.emb_dim = 320
+        elif 't30_150M' in model_path:
+            self.rep_layer = 30
+            self.emb_dim = 640
+        elif 't33_650M' in model_path:
+            self.rep_layer = 33
+            self.emb_dim = 1280
+        else:
+            raise Exception('I need to work on this. Feel free to extend :)')
+        
+        for pm in self.model_reg.parameters():
+            pm.requires_grad = False
+        self.model_reg.eval()
+
+        peft_config = LoraConfig(
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            target_modules=["q_proj", "v_proj"],
+            bias='all'
+        )
+
+        self.model = get_peft_model(self.basemodel, peft_config)
+
+        if self.config['device'] == 'gpu':
+            self.model.cuda()
+            self.model_reg.cuda()
+
+        self.lambda_reg = config['lambda']
+
+        self.mlp = nn.Linear(self.emb_dim, 1)
+
+        self.tok_to_idx = self.alphabet.tok_to_idx
+        self.idx_to_tok = {v:k for k,v in self.tok_to_idx.items()}
+
+        self.accumulate_batch_loss_train = []
+        self.accumulate_batch_loss_val = []
+        self.accumulate_batch_mse_loss_train = []
+        self.accumulate_batch_mse_loss_val = []
+        self.accumulate_batch_kl_div_train = []
+        self.accumulate_batch_kl_div_val = []
+        self.debug=True
+
+    def forward(self, batch_tokens):
+        
+        output = self.model(batch_tokens, repr_layers=[self.rep_layer], return_contacts=False)
+        logits = output['logits']
+        embeddings = output['representations'][self.rep_layer]
+
+        cls_embedding = embeddings[:, 0, :]
+        
+        y_hat = self.mlp(cls_embedding)
+
+        return y_hat, logits
     
-    def pseudolikelihood(self, mt_sequence, mask_token = '_'):
+    def training_step(self, batch, batch_idx):
+        seq, y = batch
 
-        score = 0
-        for i, aa_mt in enumerate(zip(mt_sequence)):
+        data = [
+            (f"P{i+1}", _seq) for i, _seq in enumerate(seq)
+        ]
+        batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+        batch_lens = (batch_tokens != self.alphabet.padding_idx).sum(1)
 
-            masked_query_mt = list(mt_sequence)
-            masked_query_mt[i] = mask_token
-            masked_sequence_mt = ''.join(masked_query_mt)
-            masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+        if self.config['device'] == 'gpu':
+            batch_tokens = batch_tokens.cuda()
 
-            idx_mt = self.model.tokenizer.convert_tokens_to_ids(aa_mt)
-            score += masked_log_prob_mt[i, idx_mt]
+        y_hat, logits = self(batch_tokens)
+
+        mse_loss = nn.functional.mse_loss(y_hat.flatten(), y)
+
+        with torch.no_grad():
+            output = self.model_reg(batch_tokens, repr_layers=[self.rep_layer], return_contacts=False)
+        logits_reg = output['logits']
+
+        creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
+        probs = torch.softmax(logits, dim=-1)
+        probs_reg = torch.softmax(logits_reg, dim=-1)
+        l_reg = creterion_reg(probs_reg.log().cuda(), probs)
+
+        loss = mse_loss + self.lambda_reg*l_reg
+
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
+        self.accumulate_batch_loss_train.append(loss.item())
+        self.accumulate_batch_mse_loss_train.append(mse_loss.item())
+        self.accumulate_batch_kl_div_train.append(l_reg.item())
+        
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        seq, y = batch
+
+        data = [
+            (f"P{i+1}", _seq) for i, _seq in enumerate(seq)
+        ]
+        batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+        batch_lens = (batch_tokens != self.alphabet.padding_idx).sum(1)
+
+        if self.config['device'] == 'gpu':
+            batch_tokens = batch_tokens.cuda()
+
+        y_hat, logits = self(batch_tokens)
+
+        mse_loss = nn.functional.mse_loss(y_hat.flatten(), y)
+
+        with torch.no_grad():
+            output = self.model_reg(batch_tokens, repr_layers=[self.rep_layer], return_contacts=False)
+        logits_reg = output['logits']
+
+        creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
+        probs = torch.softmax(logits, dim=-1)
+        probs_reg = torch.softmax(logits_reg, dim=-1)
+        l_reg = creterion_reg(probs_reg.log().cuda(), probs)
+
+        loss = mse_loss + self.lambda_reg*l_reg
+
+        self.log("val/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
+        self.accumulate_batch_loss_val.append(loss.item())
+        self.accumulate_batch_mse_loss_val.append(mse_loss.item())
+        self.accumulate_batch_kl_div_val.append(l_reg.item())
+
+    def trainmodel(self, df, val=None, debug=True):
+        self.model.train()
+        
+        self.debug = debug
+
+        train_dataset = ProteinFunDatasetLora(df)
+
+        val_loader = None
+        if val is not None:
+            val_dataset = ProteinFunDatasetLora(val)
+            val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], shuffle=False)
+        
+        train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
+        
+        callbacks = None
+        if self.config['early_stopping']:
+            callbacks = []
+            earlystopping_callback = EarlyStopping(monitor="val/loss", patience=self.config['patience'], verbose=False, mode="min")
+            callbacks.append(earlystopping_callback)
 
 
-        return score
+        trainer = pl.Trainer(max_epochs=self.config['epoch'], callbacks=callbacks,
+                                accelerator="auto",
+                                enable_progress_bar=False,
+                                enable_model_summary=True,
+                                precision="bf16-mixed",
+                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                )
+        
+        trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.config['lr'])
+
+    def on_train_epoch_start(self):
+        self.accumulate_batch_loss_train.clear()
+        self.accumulate_batch_loss_val.clear()
+
+        self.accumulate_batch_mse_loss_train.clear()
+        self.accumulate_batch_mse_loss_val.clear()
+
+        self.accumulate_batch_kl_div_train.clear()
+        self.accumulate_batch_kl_div_val.clear()
+    
+    def on_train_epoch_end(self):
+        if self.current_epoch % self.config['print_every_n_epoch'] == 0 and self.debug:
+            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} mse loss: {np.mean(self.accumulate_batch_mse_loss_train)} kl div {np.mean(self.accumulate_batch_kl_div_train)} val loss: {np.mean(self.accumulate_batch_loss_val)} mse loss: {np.mean(self.accumulate_batch_mse_loss_val)} kl div {np.mean(self.accumulate_batch_kl_div_val)}')
+
+    def on_train_end(self):
+        print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
+
+    def predict(self, sequences):
+        pred = []
+        for seq in tqdm(sequences):
+            data = [
+                (f"P{i+1}", _seq) for i, _seq in enumerate([seq])
+            ]
+            batch_labels, batch_strs, batch_tokens = self.batch_converter(data)
+            batch_lens = (batch_tokens != self.alphabet.padding_idx).sum(1)
+
+            if self.config['device'] == 'gpu':
+                batch_tokens = batch_tokens.cuda()
+                self.cuda()
+
+                assert next(self.parameters()).is_cuda == True
+
+            with torch.no_grad():
+                output = self.model(batch_tokens, repr_layers=[self.rep_layer], return_contacts=False)
+                embeddings = output['representations'][self.rep_layer]
+
+                cls_embedding = embeddings[:, 0, :]
+                
+                y_hat = self.mlp(cls_embedding)
+
+                assert y_hat.shape[0] == 1
+                assert y_hat.shape[1] == 1
+                pred.append(y_hat[0][0].cpu().item())
+
+        return np.array(pred)
+    
+    def print_trainable_parameters(self, model):
+        trainable_params = 0
+        all_param = 0
+        for _, param in model.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        print(
+            f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
+        )
+
+
+class ESMCLoraRegression(pl.LightningModule):
+    def __init__(self, name, config) -> None:
+        super().__init__()
+        
+        if name == 'esmc_300m':
+            self.basemodel = ESMC.from_pretrained(name)
+            self.model_reg = ESMC.from_pretrained(name)
+            self.emb_dim = 960
+        elif name == 'esmc_600m':
+            self.basemodel = ESMC.from_pretrained(name)
+            self.model_reg = ESMC.from_pretrained(name)
+            self.emb_dim = 1152
+        else:
+            raise Exception('Check ESMC name')
+
+        self.config = config
+        
+        for pm in self.model_reg.parameters():
+            pm.requires_grad = False
+        self.model_reg.eval()
+
+        peft_config = LoraConfig(
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            target_modules=["out_proj", "ffn.1", "ffn.3", "layernorm_qkv.1"],
+        )
+
+        self.model = get_peft_model(self.basemodel, peft_config)
+        for name, pm in self.model.named_parameters():
+            if 'q_ln' in name or 'k_ln' in name or 'transformer.norm.weight' in name or 'layernorm_qkv.0' in name or 'ffn.0' in name:
+                pm.requires_grad = True
+
+        if self.config['device'] == 'gpu':
+            self.model.cuda()
+            self.model_reg.cuda()
+
+        self.lambda_reg = config['lambda']
+
+        self.mlp = nn.Linear(self.emb_dim, 1)
+
+        self.accumulate_batch_loss_train = []
+        self.accumulate_batch_loss_val = []
+        self.accumulate_batch_mse_loss_train = []
+        self.accumulate_batch_mse_loss_val = []
+        self.accumulate_batch_kl_div_train = []
+        self.accumulate_batch_kl_div_val = []
+        self.debug=True
+
+    def forward(self, batch_tokens):
+        
+        output = self.model(batch_tokens)
+        logits = output.sequence_logits
+        embeddings = output.embeddings
+
+        cls_embedding = embeddings[:, 0, :]
+        
+        y_hat = self.mlp(cls_embedding)
+
+        return y_hat, logits
+    
+    def training_step(self, batch, batch_idx):
+        seq, y = batch
+
+        batch_tokens = self.model._tokenize(seq)
+
+        if self.config['device'] == 'gpu':
+            batch_tokens = batch_tokens.cuda()
+
+        y_hat, logits = self(batch_tokens)
+
+        mse_loss = nn.functional.mse_loss(y_hat.flatten(), y)
+
+        with torch.no_grad():
+            output = self.model_reg(batch_tokens)
+            logits_reg = output.sequence_logits
+
+        creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
+        probs = torch.softmax(logits, dim=-1)
+        probs_reg = torch.softmax(logits_reg, dim=-1)
+        l_reg = creterion_reg(probs_reg.log().cuda(), probs)
+
+        loss = mse_loss + self.lambda_reg*l_reg
+
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
+        self.accumulate_batch_loss_train.append(loss.item())
+        self.accumulate_batch_mse_loss_train.append(mse_loss.item())
+        self.accumulate_batch_kl_div_train.append(l_reg.item())
+        
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        seq, y = batch
+
+        batch_tokens = self.model._tokenize(seq)
+
+        if self.config['device'] == 'gpu':
+            batch_tokens = batch_tokens.cuda()
+
+        y_hat, logits = self(batch_tokens)
+
+        mse_loss = nn.functional.mse_loss(y_hat.flatten(), y)
+
+        with torch.no_grad():
+            output = self.model_reg(batch_tokens)
+            logits_reg = output.sequence_logits
+
+        creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
+        probs = torch.softmax(logits, dim=-1)
+        probs_reg = torch.softmax(logits_reg, dim=-1)
+        l_reg = creterion_reg(probs_reg.log().cuda(), probs)
+
+        loss = mse_loss + self.lambda_reg*l_reg
+
+        self.log("val/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
+        self.accumulate_batch_loss_val.append(loss.item())
+        self.accumulate_batch_mse_loss_val.append(mse_loss.item())
+        self.accumulate_batch_kl_div_val.append(l_reg.item())
+
+    def trainmodel(self, df, val=None, debug=True):
+        self.model.train()
+        
+        self.debug = debug
+
+        train_dataset = ProteinFunDatasetLora(df)
+
+        val_loader = None
+        if val is not None:
+            val_dataset = ProteinFunDatasetLora(val)
+            val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], shuffle=False)
+        
+        train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
+        
+        callbacks = None
+        if self.config['early_stopping']:
+            callbacks = []
+            earlystopping_callback = EarlyStopping(monitor="val/loss", patience=self.config['patience'], verbose=False, mode="min")
+            callbacks.append(earlystopping_callback)
+
+
+        trainer = pl.Trainer(max_epochs=self.config['epoch'], callbacks=callbacks,
+                                accelerator="auto",
+                                enable_progress_bar=False,
+                                enable_model_summary=True,
+                                precision="bf16-mixed",
+                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                )
+        
+        trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.config['lr'])
+
+    def on_train_epoch_start(self):
+        self.accumulate_batch_loss_train.clear()
+        self.accumulate_batch_loss_val.clear()
+
+        self.accumulate_batch_mse_loss_train.clear()
+        self.accumulate_batch_mse_loss_val.clear()
+
+        self.accumulate_batch_kl_div_train.clear()
+        self.accumulate_batch_kl_div_val.clear()
+    
+    def on_train_epoch_end(self):
+        if self.current_epoch % self.config['print_every_n_epoch'] == 0 and self.debug:
+            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} mse loss: {np.mean(self.accumulate_batch_mse_loss_train)} kl div {np.mean(self.accumulate_batch_kl_div_train)} val loss: {np.mean(self.accumulate_batch_loss_val)} mse loss: {np.mean(self.accumulate_batch_mse_loss_val)} kl div {np.mean(self.accumulate_batch_kl_div_val)}')
+
+    def on_train_end(self):
+        print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
+
+    def predict(self, sequences):
+        pred = []
+        for seq in tqdm(sequences):
+            batch_tokens = self.model._tokenize([seq])
+
+            if self.config['device'] == 'gpu':
+                batch_tokens = batch_tokens.cuda()
+                self.cuda()
+
+                assert next(self.parameters()).is_cuda == True
+
+            with torch.no_grad():
+                output = self.model(batch_tokens)
+                embeddings = output.embeddings
+
+                cls_embedding = embeddings[:, 0, :]
+                
+                y_hat = self.mlp(cls_embedding.to(torch.float32))
+
+                assert y_hat.shape[0] == 1
+                assert y_hat.shape[1] == 1
+                pred.append(y_hat[0][0].cpu().item())
+
+        return np.array(pred)
+    
+    def print_trainable_parameters(self, model):
+        trainable_params = 0
+        all_param = 0
+        for _, param in model.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        print(
+            f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
+        )

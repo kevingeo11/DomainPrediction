@@ -19,19 +19,18 @@ from DomainPrediction.utils import helper
 from DomainPrediction.utils.constants import *
 
 protein = ProteinChain.from_pdb('../../Data/gxps/gxps_ATC_AF.pdb')
-# protein_T_domain = ProteinChain.from_pdb('../../Data/gxps/gxps_T.pdb')
 
 sequence_prompt = ''.join([protein[i].sequence if i in A_gxps_atc + C_gxps_atc else '_' for i in range(len(protein))])
-structure_prompt = torch.full((len(sequence_prompt), 37, 3), np.nan)
+# structure_prompt = torch.full((len(sequence_prompt), 37, 3), np.nan)
 # structure_prompt[T_gxps_atc] = torch.tensor(protein_T_domain.atom37_positions)
-structure_prompt[T_gxps_atc] = torch.tensor(protein.atom37_positions)[T_gxps_atc]
-# structure_prompt = torch.tensor(protein.atom37_positions)
+# structure_prompt[T_gxps_atc] = torch.tensor(protein.atom37_positions)[T_gxps_atc]
+structure_prompt = torch.tensor(protein.atom37_positions)
 
 model: ESM3InferenceClient = ESM3.from_pretrained("esm3_sm_open_v1").to("cuda")
 
-fasta_file = '../../Data/round_2_exp/esm3_str_400.fasta' ## file loc
+fasta_file = '../../Data/round_3_exp/esm3_str_2000.fasta' ## file loc
 
-N_GENERATIONS = 400
+N_GENERATIONS = 2000
 temperature = 0.5
 run_structure = False
 print(f'T domain: {protein[T_gxps_atc].sequence}')
@@ -68,7 +67,7 @@ for idx in range(N_GENERATIONS):
     assert protein[C_gxps_atc].sequence == ''.join([generated_protein.sequence[i] for i in range(len(generated_protein.sequence)) if i in C_gxps_atc])
 
     seq_dict = {}
-    gen_idx = f'gxps_ATC_esm3_str_temp_{temperature}_gen_{idx}'
+    gen_idx = f'gxps_ATC_esm3_str_gen_{idx}'
     seq_dict[gen_idx] = generated_protein.sequence
 
     print(gen_idx)
