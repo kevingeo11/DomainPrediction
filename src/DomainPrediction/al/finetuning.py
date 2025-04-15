@@ -69,12 +69,12 @@ class ProteinFunDatasetContrast(Dataset):
 
 
 class ESM2ConFit(pl.LightningModule):
-    def __init__(self, config) -> None:
+    def __init__(self, model_path, config) -> None:
         super().__init__()
         self.config = config
 
-        self.basemodel, self.alphabet = esm.pretrained.load_model_and_alphabet(config['model_path'])
-        self.model_reg, _ = esm.pretrained.load_model_and_alphabet(config['model_path'])
+        self.basemodel, self.alphabet = esm.pretrained.load_model_and_alphabet(model_path)
+        self.model_reg, _ = esm.pretrained.load_model_and_alphabet(model_path)
         self.batch_converter = self.alphabet.get_batch_converter()
         
         for pm in self.model_reg.parameters():
@@ -90,6 +90,11 @@ class ESM2ConFit(pl.LightningModule):
         )
         
         self.model = get_peft_model(self.basemodel, peft_config)
+
+        if self.config['use_seq_head']:
+            for name, pm in self.model.named_parameters():
+                if 'lm_head' in name or 'emb_layer_norm_after' in name:
+                    pm.requires_grad = True
         
         if config['device'] == 'gpu':
             self.model.cuda()
@@ -99,6 +104,10 @@ class ESM2ConFit(pl.LightningModule):
 
         self.accumulate_batch_loss_train = []
         self.accumulate_batch_loss_val = []
+        self.accumulate_batch_bt_loss_train = []
+        self.accumulate_batch_bt_loss_val = []
+        self.accumulate_batch_kl_div_train = []
+        self.accumulate_batch_kl_div_val = []
         self.debug=True
 
     def forward(self, batch, batch_tokens_masked, batch_tokens, batch_tokens_wt):
@@ -124,9 +133,11 @@ class ESM2ConFit(pl.LightningModule):
         for i in range(len(scores)):
             for j in range(i, len(scores)):
                 if y[i] > y[j]:
-                    loss += torch.log(1 + torch.exp(scores[j]-scores[i]))
+                    if torch.abs(scores[j]-scores[i]) < 80:
+                        loss += torch.log(1 + torch.exp(scores[j]-scores[i]))
                 else:
-                    loss += torch.log(1 + torch.exp(scores[i]-scores[j]))
+                    if torch.abs(scores[i]-scores[j]) < 80:
+                        loss += torch.log(1 + torch.exp(scores[i]-scores[j]))
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -157,7 +168,7 @@ class ESM2ConFit(pl.LightningModule):
         if self.config['device'] == 'gpu':
             batch_tokens_wt = batch_tokens_wt.cuda()
 
-        logits_reg = self.model_reg(batch_tokens_wt)['logits']
+        logits_reg = self.model_reg(batch_tokens_masked)['logits']
 
         creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
         probs = torch.softmax(logits, dim=-1)
@@ -168,6 +179,8 @@ class ESM2ConFit(pl.LightningModule):
 
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
         self.accumulate_batch_loss_train.append(loss.item())
+        self.accumulate_batch_bt_loss_train.append(bt_loss.item())
+        self.accumulate_batch_kl_div_train.append(l_reg.item())
         
         return loss
     
@@ -199,17 +212,19 @@ class ESM2ConFit(pl.LightningModule):
         if self.config['device'] == 'gpu':
             batch_tokens_wt = batch_tokens_wt.cuda()
 
-        logits_reg = self.model_reg(batch_tokens_wt)['logits']
+        logits_reg = self.model_reg(batch_tokens_masked)['logits']
 
         creterion_reg = torch.nn.KLDivLoss(reduction='batchmean')
         probs = torch.softmax(logits, dim=-1)
         probs_reg = torch.softmax(logits_reg, dim=-1)
         l_reg = creterion_reg(probs_reg.log().cuda(), probs)
 
-        loss = bt_loss + self.lambda_reg*l_reg
+        loss = bt_loss
 
         self.log("val/loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=y.shape[0])
         self.accumulate_batch_loss_val.append(loss.item())
+        self.accumulate_batch_bt_loss_val.append(bt_loss.item())
+        self.accumulate_batch_kl_div_val.append(l_reg.item())
 
     def trainmodel(self, df, wt, val=None, debug=True):
         self.model.train()
@@ -224,13 +239,23 @@ class ESM2ConFit(pl.LightningModule):
             val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=False)
         
         train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=True)
-        # train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], collate_fn=ProteinFunDatasetContrast.collate_fn, shuffle=False)
-
+        
         callbacks = None
         if self.config['early_stopping']:
             callbacks = []
             earlystopping_callback = EarlyStopping(monitor="val/loss", patience=self.config['patience'], verbose=False, mode="min")
             callbacks.append(earlystopping_callback)
+
+        if self.config['model_checkpoint']:
+            if callbacks is None:
+                callbacks = []
+            checkpoint_callback = ModelCheckpoint(
+                monitor="val/loss",
+                filename="best-checkpoint-{epoch:02d}",
+                save_top_k=2,
+                mode="min",
+            )
+            callbacks.append(checkpoint_callback)
 
 
         trainer = pl.Trainer(max_epochs=self.config['epoch'], callbacks=callbacks,
@@ -291,10 +316,16 @@ class ESM2ConFit(pl.LightningModule):
     def on_train_epoch_start(self):
         self.accumulate_batch_loss_train.clear()
         self.accumulate_batch_loss_val.clear()
+
+        self.accumulate_batch_bt_loss_train.clear()
+        self.accumulate_batch_bt_loss_val.clear()
+
+        self.accumulate_batch_kl_div_train.clear()
+        self.accumulate_batch_kl_div_val.clear()
     
     def on_train_epoch_end(self):
         if self.current_epoch % self.config['print_every_n_epoch'] == 0 and self.debug:
-            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
+            print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} bt loss: {np.mean(self.accumulate_batch_bt_loss_train)} kl div {np.mean(self.accumulate_batch_kl_div_train)} val loss: {np.mean(self.accumulate_batch_loss_val)} bt loss: {np.mean(self.accumulate_batch_bt_loss_val)} kl div {np.mean(self.accumulate_batch_kl_div_val)}')
 
     def on_train_end(self):
         print(f'Epoch: {self.current_epoch}: train loss: {np.mean(self.accumulate_batch_loss_train)} val loss: {np.mean(self.accumulate_batch_loss_val)}')
@@ -316,27 +347,6 @@ class ESM2ConFit(pl.LightningModule):
         log_prob = torch.log_softmax(logits, dim=-1)[0,1:-1,:]
 
         return log_prob.cpu().numpy()
-    
-    def get_wildtype_marginal(self, mt_sequence, wt_sequence, wt_log_prob=None):
-        if wt_log_prob is None:
-            assert len(wt_sequence) == len(mt_sequence)
-            wt_log_prob = self.get_log_prob(sequence=wt_sequence)
-
-        assert wt_log_prob.shape[0] == len(wt_sequence) == len(mt_sequence)
-
-        n_muts = 0
-        score = 0
-        for i, (aa_mt, aa_wt) in enumerate(zip(mt_sequence, wt_sequence)):
-            if aa_wt != aa_mt:
-                ## mutation pos
-                n_muts += 1
-
-                idx_mt = self.alphabet.get_idx(aa_mt)
-                idx_wt = self.alphabet.get_idx(aa_wt)
-                score += wt_log_prob[i, idx_mt] - wt_log_prob[i, idx_wt]
-
-
-        return score, n_muts
     
     def get_masked_marginal(self, mt_sequence, wt_sequence, mask_token = '<mask>'):
 
@@ -371,7 +381,6 @@ class ESM2ConFit(pl.LightningModule):
                 idx_wt = self.alphabet.get_idx(aa_wt)
                 score += masked_log_prob[i, idx_mt] - masked_log_prob[i, idx_wt]
 
-
         return score, n_muts
     
     def configure_optimizers(self):
@@ -387,6 +396,14 @@ class ESM2ConFit(pl.LightningModule):
         print(
             f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
         )
+
+    def predict(self, sequences, wt_sequence):
+        pred = []
+        for seq in tqdm(sequences):
+            score, _ = self.get_masked_marginal(seq, wt_sequence)
+            pred.append(score)
+
+        return np.array(pred)
 
 
 class ESMCConFit(pl.LightningModule):
