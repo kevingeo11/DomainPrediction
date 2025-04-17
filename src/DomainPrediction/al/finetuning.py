@@ -435,7 +435,9 @@ class ESMCConFit(pl.LightningModule):
         
         self.model = get_peft_model(self.basemodel, peft_config)
         for name, pm in self.model.named_parameters():
-            if 'q_ln' in name or 'k_ln' in name or 'norm.weight' in name:
+            # if 'q_ln' in name or 'k_ln' in name or 'norm.weight' in name:
+            #     pm.requires_grad = True
+            if 'q_ln' in name or 'k_ln' in name:
                 pm.requires_grad = True
 
         if self.config['use_seq_head']:

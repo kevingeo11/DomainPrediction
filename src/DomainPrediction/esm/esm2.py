@@ -151,6 +151,21 @@ class ESM2():
 
         return np.exp(-1*sum_log/len(sequence))
     
+    def pseudolikelihood(self, mt_sequence, mask_token='<mask>'):
+
+        score = 0
+        for i, aa_mt in enumerate(mt_sequence):
+
+            masked_query_mt = list(mt_sequence)
+            masked_query_mt[i] = mask_token
+            masked_sequence_mt = ''.join(masked_query_mt)
+            masked_log_prob_mt = self.get_log_prob(sequence=masked_sequence_mt)
+
+            idx_mt = self.tok_to_idx[aa_mt]
+            score += masked_log_prob_mt[i, idx_mt]
+
+        return score
+    
     def get_log_prob(self, sequence):
         logits = self.get_logits(sequence)
         log_prob = torch.log_softmax(logits, dim=-1)[0,1:-1,:]
