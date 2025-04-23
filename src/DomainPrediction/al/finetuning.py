@@ -22,7 +22,8 @@ else:
 
 class ProteinFunDatasetLora(Dataset):
     def __init__(self, df):
-        self.seq, self.y = df['seq'].to_numpy(), df['fitness_log'].to_numpy().astype(np.float32)
+        # self.seq, self.y = df['seq'].to_numpy(), df['fitness_log'].to_numpy().astype(np.float32)
+        self.seq, self.y = df['seq'].to_numpy(), df['fitness_raw'].to_numpy().astype(np.float32)
     
     def __len__(self):
         return self.seq.shape[0]
@@ -262,8 +263,9 @@ class ESM2ConFit(pl.LightningModule):
                                 accelerator="auto",
                                 enable_progress_bar=False,
                                 enable_model_summary=True,
-                                precision="16-mixed",
-                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                # precision="16-mixed",
+                                accumulate_grad_batches=self.config['accumulate_batch_size'],
+                                gradient_clip_val=1.0
                                 )
         
         trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -604,7 +606,8 @@ class ESMCConFit(pl.LightningModule):
                                 enable_progress_bar=False,
                                 enable_model_summary=True,
                                 precision="bf16-mixed",
-                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                accumulate_grad_batches=self.config['accumulate_batch_size'],
+                                gradient_clip_val=1.0
                                 )
         
         trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -905,8 +908,9 @@ class ESM2LoraRegression(pl.LightningModule):
                                 accelerator="auto",
                                 enable_progress_bar=False,
                                 enable_model_summary=True,
-                                precision="bf16-mixed",
-                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                # precision="bf16-mixed",
+                                accumulate_grad_batches=self.config['accumulate_batch_size'],
+                                gradient_clip_val=1.0
                                 )
         
         trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -1117,7 +1121,8 @@ class ESMCLoraRegression(pl.LightningModule):
                                 enable_progress_bar=False,
                                 enable_model_summary=True,
                                 precision="bf16-mixed",
-                                accumulate_grad_batches=self.config['accumulate_batch_size']
+                                accumulate_grad_batches=self.config['accumulate_batch_size'],
+                                gradient_clip_val=1.0
                                 )
         
         trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
