@@ -593,9 +593,9 @@ class ESMCConFit(pl.LightningModule):
             if callbacks is None:
                 callbacks = []
             checkpoint_callback = ModelCheckpoint(
-                monitor="val/loss",
+                monitor="train/loss",
                 filename="best-checkpoint-{epoch:02d}",
-                save_top_k=2,
+                save_top_k=3,
                 mode="min",
             )
             callbacks.append(checkpoint_callback)
